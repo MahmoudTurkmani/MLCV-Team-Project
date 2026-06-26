@@ -42,4 +42,4 @@ Note: an attempt to use `EfficientNetB0` was used (for the sake of size and time
 |Augmentation      |Epochs |Patience |mAP |
 |    -             |   -   |    -    | -  |
 |    -             |  15   | 3       | -  |
-|SpecAugment       |  12   | 7       | -  |
+|SpecAugment       |  12   | 7       | ~0.16  |

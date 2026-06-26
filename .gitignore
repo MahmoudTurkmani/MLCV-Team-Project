@@ -161,3 +161,6 @@ cython_debug/
 
 # Competition Files
 birdclef-2026
+
+# Logging
+wandb/
