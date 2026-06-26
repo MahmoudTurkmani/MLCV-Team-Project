@@ -17,8 +17,16 @@ from tqdm import tqdm  # Changed from tqdm.notebook for terminal compatibility
 # ==========================================
 # DATASET CLASSES
 # ==========================================
+import os
+import ast
+import torch
+import torchaudio
+import pandas as pd
+import numpy as np
+from torch.utils.data import Dataset
+
 class BirbSet(Dataset):
-    def __init__(self, df, root, clip_length, label_to_idx, is_train=False):
+    def __init__(self, df, root, clip_length, label_to_idx, is_train=False, use_pink_noise=False, use_spec_augment=False):
         self.clips            = []
         self.start_times      = []
         self.end_times        = []
@@ -31,6 +39,10 @@ class BirbSet(Dataset):
         self.label_to_idx     = label_to_idx
         self.is_train         = is_train
         self.root             = root
+        
+        # --- Augmentation Toggle Flags ---
+        self.use_pink_noise   = use_pink_noise
+        self.use_spec_augment = use_spec_augment
 
         self.amp_to_db = torchaudio.transforms.AmplitudeToDB(stype='power')
         self.mel_spect = torchaudio.transforms.MelSpectrogram(
@@ -38,6 +50,11 @@ class BirbSet(Dataset):
             n_fft=800,
             n_mels=64
         )
+        
+        # Only initialize masking modules if we are training AND SpecAugment is enabled
+        if self.is_train and self.use_spec_augment:
+            self.freq_mask = torchaudio.transforms.FrequencyMasking(freq_mask_param=12)
+            self.time_mask = torchaudio.transforms.TimeMasking(time_mask_param=24)
         
         for _, entry in df.iterrows():
             curr_audio_loc = os.path.join(self.root, os.path.normpath(entry["filename"]))
@@ -64,7 +81,28 @@ class BirbSet(Dataset):
 
     def __len__(self):
         return len(self.clips)
-    
+        
+    def _add_pink_noise(self, waveform, snr_db=10):
+        """Generates true Pink Noise (1/f spectrum) and blends it with the waveform."""
+        white_noise = torch.randn_like(waveform)
+        X_white = torch.fft.rfft(white_noise)
+        
+        freqs = torch.arange(1, X_white.shape[-1] + 1, device=waveform.device)
+        multiplier = 1.0 / torch.sqrt(freqs)
+        X_pink = X_white * multiplier
+        
+        pink_noise = torch.fft.irfft(X_pink, n=waveform.shape[-1])
+        pink_noise = pink_noise / torch.std(pink_noise)
+        
+        sig_power = torch.mean(waveform ** 2)
+        noise_power = torch.mean(pink_noise ** 2)
+        
+        if sig_power < 1e-7:
+            return waveform
+            
+        factor = torch.sqrt((sig_power / noise_power) * (10 ** (-snr_db / 10.0)))
+        return waveform + pink_noise * factor
+
     def __getitem__(self, idx):
         audio_clip = self.clips[idx]
         try:
@@ -83,21 +121,29 @@ class BirbSet(Dataset):
             elif current_len < chunk_size:
                 waveform = torch.nn.functional.pad(waveform, (0, chunk_size - current_len))
 
+            # --- Check Pink Noise Flag ---
+            if self.is_train and self.use_pink_noise and np.random.rand() < 0.5:
+                snr = np.random.uniform(5.0, 20.0)
+                waveform = self._add_pink_noise(waveform, snr_db=snr)
+
             spectrogram = self.mel_spect(waveform)
             spectrogram = self.amp_to_db(spectrogram)
             
+            # --- Check SpecAugment Flag ---
+            if self.is_train and self.use_spec_augment:
+                if np.random.rand() < 0.7:
+                    spectrogram = self.freq_mask(spectrogram)
+                if np.random.rand() < 0.7:
+                    spectrogram = self.time_mask(spectrogram)
+
             mean, std   = spectrogram.mean(), spectrogram.std() + 1e-6
             spectrogram = (spectrogram - mean) / std
 
             target = torch.zeros(len(self.label_to_idx), dtype=torch.float32)
-
             primary = self.labels[idx]
             rating = self.ratings[idx]
-            if pd.isna(rating) or rating == 0:
-                confidence = 1.0 
-            else:
-                confidence = rating / 5.0 
-
+            
+            confidence = 1.0 if pd.isna(rating) or rating == 0 else rating / 5.0 
             target[primary] = confidence
 
             raw_secondary = self.secondary_labels[idx]
@@ -280,15 +326,22 @@ if __name__ == "__main__":
     MAX_EPOCHS      = 30
     PATIENCE        = 12  
 
+    # --- AUGMENTATION TOGGLES ---
+    USE_PINK_NOISE   = True   # Set to False to disable
+    USE_SPEC_AUGMENT = True   # Set to False to disable
+
     # --- Setup Logging ---
     run = wandb.init(
         entity="pumpkin_person-tu-dresden",
-        project="birbs-team-project",
+        project="CNN-Birds",
+        name="Training Pink Spec",
         config={
             "learning_rate": 0.0001,
             "architecture": "CNN",
             "dataset": "BirdClef+ 2026",
             "epochs": MAX_EPOCHS,
+            "use_pink_noise": USE_PINK_NOISE,
+            "use_spec_augment": USE_SPEC_AUGMENT
         },
     )
 
@@ -313,7 +366,9 @@ if __name__ == "__main__":
         root=os.path.join(root_path, 'train_audio'), 
         clip_length=CLIP_LENGTH_SEC,
         label_to_idx=master_label_to_idx, 
-        is_train=True  
+        is_train=True,
+        use_pink_noise=USE_PINK_NOISE,
+        use_spec_augment=USE_SPEC_AUGMENT
     )
     loader = DataLoader(dset_train, batch_size=32, shuffle=True, pin_memory=True, num_workers=3)
 
@@ -359,7 +414,7 @@ if __name__ == "__main__":
                 'best_val_map': best_val_map,
             }, "best_efficientbirb_model.pth")
 
-            artifact = wandb.Artifact(name="cnn_bird_model_vanilla", type="model")
+            artifact = wandb.Artifact(name="cnn_bird_model_pink_spec", type="model", metadata={"epoch": epoch})
             artifact.add_file(local_path="best_efficientbirb_model.pth")
             run.log_artifact(artifact)
 
