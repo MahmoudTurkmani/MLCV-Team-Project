@@ -35,11 +35,20 @@ This section describes the work that has been done on each of the tasks and some
 
 ### CNN
 
-To classify the data using a CNN, the audio was first loaded in, transformed into a MelSpectrogram, and then passed to a CNN that uses `EfficientNetB3` as a backbone.
+To classify the data using a CNN, the audio was first loaded in, transformed into a MelSpectrogram, and then passed to a CNN that uses `EfficientNetB3` or `EfficientNetB0` as a backbone.
+The reason for traning both the `B0` and the `B3` model is that the `B3` model yields better results but is too large for the competition. `B0` yields slightly worse results but can be submitted to the competition as it is abides to the time limit constraint. 
+Note: `roc-auc` was chosen as the evaluation metric for the models as it is what the competition uses.
 
-Note: an attempt to use `EfficientNetB0` was used (for the sake of size and time). However, the results were siginificantly worse than those obtained with B3.
+#### B3 Results
+|Augmentation      |Epoch  | Local Score |
+|---               |---    |---          |
+|Vanilla           | 24    | 0.709       |
+|SpecAugment       | 16    | 0.639       |
+|SpecAug + Pink    | 24    | 0.7208      |
 
-|Augmentation      |Epochs |Patience |mAP |
-|    -             |   -   |    -    | -  |
-|    -             |  15   | 3       | -  |
-|SpecAugment       |  12   | 7       | ~0.16  |
+#### B0 Results 
+|Augmentation      |Epochs | Private Score    | Public Score     |
+|---               |---    |---               |---               |
+|Vanilla           |   -   | -                | -                |
+|SpecAugment       |   -   | -                | -                |
+|SpecAug + Pink    | 1     | 0.66607          | 0.65888          |
