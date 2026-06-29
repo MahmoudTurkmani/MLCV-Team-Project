@@ -123,21 +123,23 @@ class BirbSet(Dataset):
 
             # --- Check Pink Noise Flag ---
             if self.is_train and self.use_pink_noise and np.random.rand() < 0.5:
-                snr = np.random.uniform(5.0, 20.0)
+                snr = np.random.uniform(10.0, 25.0)
                 waveform = self._add_pink_noise(waveform, snr_db=snr)
 
+            # Convert to dB
             spectrogram = self.mel_spect(waveform)
             spectrogram = self.amp_to_db(spectrogram)
             
-            # --- Check SpecAugment Flag ---
-            if self.is_train and self.use_spec_augment:
-                if np.random.rand() < 0.7:
-                    spectrogram = self.freq_mask(spectrogram)
-                if np.random.rand() < 0.7:
-                    spectrogram = self.time_mask(spectrogram)
-
+            # Normalize
             mean, std   = spectrogram.mean(), spectrogram.std() + 1e-6
             spectrogram = (spectrogram - mean) / std
+
+            # --- Check SpecAugment Flag ---
+            if self.is_train and self.use_spec_augment:
+                if np.random.rand() < 0.5:
+                    spectrogram = self.freq_mask(spectrogram)
+                if np.random.rand() < 0.5:
+                    spectrogram = self.time_mask(spectrogram)
 
             target = torch.zeros(len(self.label_to_idx), dtype=torch.float32)
             primary = self.labels[idx]
