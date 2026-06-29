@@ -50,5 +50,5 @@ Note: `roc-auc` was chosen as the evaluation metric for the models as it is what
 |Augmentation      |Epochs | Private Score    | Public Score     |
 |---               |---    |---               |---               |
 |Vanilla           |   -   | -                | -                |
-|SpecAugment       |   -   | -                | -                |
+|SpecAugment       | 18    | 0.72930          | 0.70461          |
 |SpecAug + Pink    | 1     | 0.66607          | 0.65888          |
