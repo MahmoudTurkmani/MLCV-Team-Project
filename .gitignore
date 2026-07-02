@@ -166,3 +166,5 @@ birdclef-2026
 wandb/
 artifacts/
 *.pth
+/CNN/perch_v2_cpu
+CNN/embedding_cache/train/embeddings_clean.npz
