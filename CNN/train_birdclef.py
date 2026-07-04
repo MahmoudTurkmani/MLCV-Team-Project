@@ -32,11 +32,28 @@ import pandas as pd
 import numpy as np
 from torch.utils.data import Dataset
 
+def _parse_timestamp_to_seconds(ts):
+    if pd.isna(ts):
+        return 0.0
+    
+    ts_str = str(ts).strip()
+    if ":" in ts_str:
+        parts = ts.split(":")
+        if len(parts) == 3:
+            h, m, s = parts
+            return float(h) * 3600 + float(m) * 60 + float(s)
+        elif len(parts) == 2:
+            m, s = parts
+            return float(m) * 60 + float(s)
+    
+    return float(ts_str)
+
 class BirbSet(Dataset):
     def __init__(self, df, root, clip_length, label_to_idx, is_train=False,
                  use_pink_noise=False, use_white_noise=False, use_spec_augment=False,
                  use_pitch_shift=False, use_esc50_noise=False, esc50_path=None,
-                 esc50_categories=None, n_mels=128, n_fft=1024):
+                 esc50_categories=None, n_mels=128, n_fft=1024,
+                 soundscape_clips_df=None):
         self.clips            = []
         self.start_times      = []
         self.end_times        = []
@@ -133,9 +150,7 @@ class BirbSet(Dataset):
             self.time_mask = torchaudio.transforms.TimeMasking(time_mask_param=24)
         
         for _, entry in df.iterrows():
-            # Support absolute paths if provided by the dataframe, fallback to root + filename
-            curr_audio_loc = entry.get('filepath', os.path.join(self.root, os.path.normpath(entry["filename"])))
-            
+            curr_audio_loc = os.path.join(self.root, os.path.normpath(entry["filename"]))
             try:
                 info = torchaudio.info(curr_audio_loc)
                 duration = info.num_frames / self.sample_rate
@@ -143,29 +158,41 @@ class BirbSet(Dataset):
                 print(f"Skipping metadata read error for {curr_audio_loc}: {e}")
                 continue
             
-            # If the dataframe row provides exact timestamps (Soundscape data)
-            if not pd.isna(entry.get('start_sec')) and not pd.isna(entry.get('end_sec')):
+            pos = 0.0
+            while pos < duration:
+                end_pos = min(pos + self.clip_length, duration)
+                
                 self.clips.append(curr_audio_loc)
                 self.labels.append(self.label_to_idx[entry['primary_label']])
                 self.ratings.append(entry.get('rating'))
                 self.secondary_labels.append(entry.get('secondary_labels', '[]'))
-                self.start_times.append(float(entry['start_sec']))
-                self.end_times.append(float(entry['end_sec']))
-            else:
-                # Focal recording: chunk the entire duration
-                pos = 0.0
-                while pos < duration:
-                    end_pos = min(pos + self.clip_length, duration)
-                    
-                    self.clips.append(curr_audio_loc)
-                    self.labels.append(self.label_to_idx[entry['primary_label']])
-                    self.ratings.append(entry.get('rating'))
-                    self.secondary_labels.append(entry.get('secondary_labels', '[]'))
-                    
-                    self.start_times.append(pos)                     
-                    self.end_times.append(end_pos)     
-                    
-                    pos += self.clip_length
+                
+                self.start_times.append(pos)                     
+                self.end_times.append(end_pos)     
+                
+                pos += self.clip_length
+
+        # --- Soundscape clip injection ---
+        # Each row in soundscape_clips_df is already a single annotated 5-second
+        # window (start_time/end_time come from the competition labels rather than
+        # being derived by uniform chunking). We add them directly to the internal
+        # clip lists using the exact annotated boundaries, so __getitem__ loads
+        # the precise window that was labelled rather than an arbitrary alignment.
+        if soundscape_clips_df is not None and len(soundscape_clips_df) > 0:
+            skipped = 0
+            for _, clip in soundscape_clips_df.iterrows():
+                if clip['primary_label'] not in self.label_to_idx:
+                    skipped += 1
+                    continue
+                self.clips.append(clip['audio_path'])
+                self.labels.append(self.label_to_idx[clip['primary_label']])
+                self.ratings.append(clip.get('rating', np.nan))
+                self.secondary_labels.append(clip.get('secondary_labels', '[]'))
+                self.start_times.append(_parse_timestamp_to_seconds(clip['start_time']))
+                self.end_times.append(_parse_timestamp_to_seconds(clip['end_time']))
+            added = len(soundscape_clips_df) - skipped
+            print(f"BirbSet: added {added} soundscape clips "
+                  f"({skipped} skipped — label not in taxonomy).")
 
     def __len__(self):
         return len(self.clips)
@@ -749,59 +776,343 @@ def validate_epoch(model, dataloader, criterion, epoch):
 # ==========================================
 # VALIDATION COVERAGE FIX
 # ==========================================
-def prioritize_train_coverage(full_df, df_train, df_val, label_col='primary_label', filename_col='filename'):
+def ensure_val_coverage(full_df, df_train, df_val,
+                         label_col='primary_label', filename_col='filename'):
     """
-    Ensures that classes are prioritized for training. 
-    1. Singleton classes (count == 1) are forced into the training set.
-    2. Classes completely missing from training (but have >1 example) are rescued from validation.
-    3. Classes completely missing from validation (but have >1 example) are rescued from training.
-    """
-    all_classes = set(full_df[label_col].unique())
-    class_counts = full_df[label_col].value_counts()
-    singletons = set(class_counts[class_counts == 1].index.tolist())
-    
-    # 1. Force singletons into the training set
-    for cls in singletons:
-        if cls in df_val[label_col].values:
-            move_mask = df_val[label_col] == cls
-            rows_moved = df_val[move_mask].copy()
-            df_val = df_val[~move_mask].reset_index(drop=True)
-            df_train = pd.concat([df_train, rows_moved], ignore_index=True)
-            
-    # 2. Rescue classes missing from training (count > 1)
-    train_classes = set(df_train[label_col].unique())
-    missing_in_train = sorted(all_classes - train_classes)
-    
-    for cls in missing_in_train:
-        candidate_files = df_val.loc[df_val[label_col] == cls, filename_col].unique()
-        if len(candidate_files) > 0:
-            chosen_file = candidate_files[0]
-            move_mask = df_val[filename_col] == chosen_file
-            rows_moved = df_val[move_mask].copy()
-            df_val = df_val[~move_mask].reset_index(drop=True)
-            df_train = pd.concat([df_train, rows_moved], ignore_index=True)
+    Guarantees every class that exists in the full dataset appears in the
+    validation split with at least one example.
 
-    # 3. Rescue classes missing from validation (Only if count > 1)
-    val_classes = set(df_val[label_col].unique())
-    missing_in_val = sorted(all_classes - val_classes)
-    
-    for cls in missing_in_val:
-        if cls in singletons:
-            continue # Leave singletons in train
-            
+    Root cause: StratifiedGroupKFold groups by filename, so if a rare species
+    has only 1-2 audio files, there is a real chance all of them land in
+    training and none in validation. ROC-AUC then silently drops those classes
+    from the macro average, inflating the reported metric relative to what the
+    leaderboard actually scores (which includes those species).
+
+    Fix: after the initial split, identify every class absent from val and move
+    exactly one file per missing class from train to val, choosing the file with
+    the most clips to maximise the chance of meaningful positive/negative coverage
+    in the resulting val set. Group integrity is preserved -- all clips from any
+    one audio file stay on the same side of the split.
+
+    Note: this introduces a mild form of leakage for the moved examples (the
+    model has trained on them). This is an acceptable trade-off when the
+    alternative is a validation metric computed over a materially different set
+    of classes than what the leaderboard scores against.
+    """
+    val_classes   = set(df_val[label_col].unique())
+    all_classes   = set(full_df[label_col].unique())
+    missing       = sorted(all_classes - val_classes)
+
+    if not missing:
+        print(f"✅ Val class coverage: {len(val_classes)}/{len(all_classes)} (100%) — no fix needed.")
+        return df_train, df_val
+
+    print(f"⚠️  Val class coverage before fix: {len(val_classes)}/{len(all_classes)}. "
+          f"Moving one file per missing class for {len(missing)} class(es)...")
+
+    indices_to_move = []
+    still_missing   = []
+    for cls in missing:
         candidate_files = df_train.loc[df_train[label_col] == cls, filename_col].unique()
-        if len(candidate_files) > 0:
-            chosen_file = candidate_files[0]
-            move_mask = df_train[filename_col] == chosen_file
-            rows_moved = df_train[move_mask].copy()
-            df_train = df_train[~move_mask].reset_index(drop=True)
-            df_val = pd.concat([df_val, rows_moved], ignore_index=True)
+        if len(candidate_files) == 0:
+            still_missing.append(cls)
+            continue
+        # Pick the file with the most rows so the moved val subset is as
+        # representative as possible for that class.
+        file_clip_counts = {
+            f: int((df_train[filename_col] == f).sum()) for f in candidate_files
+        }
+        chosen_file = max(file_clip_counts, key=file_clip_counts.get)
+        indices_to_move.extend(df_train.index[df_train[filename_col] == chosen_file].tolist())
 
-    final_train_classes = len(set(df_train[label_col].unique()))
-    final_val_classes = len(set(df_val[label_col].unique()))
-    print(f"✅ Coverage Check -> Train: {final_train_classes}/{len(all_classes)} classes | Val: {final_val_classes}/{len(all_classes)} classes.")
-    
+    if indices_to_move:
+        move_mask  = df_train.index.isin(indices_to_move)
+        rows_moved = df_train[move_mask].copy()
+        df_train   = df_train[~move_mask].reset_index(drop=True)
+        df_val     = pd.concat([df_val, rows_moved], ignore_index=True)
+
+    val_classes_after = set(df_val[label_col].unique())
+    print(f"✅ Val class coverage after fix: {len(val_classes_after)}/{len(all_classes)}. "
+          f"Moved {len(indices_to_move)} clips across {len(missing) - len(still_missing)} file(s).")
+    if still_missing:
+        print(f"   ⚠️  {len(still_missing)} class(es) couldn't be moved (no training examples): {still_missing}")
+
     return df_train, df_val
+
+
+
+
+# ==========================================
+# SOUNDSCAPE DATA LOADING
+# ==========================================
+def load_soundscape_labels(labels_path, soundscape_audio_dir, label_to_idx,
+                            clip_length=5.0):
+    """
+    Load train_soundscape_labels.csv and return a clip-level DataFrame that
+    BirbSet can ingest directly via its soundscape_clips_df parameter.
+
+    Handles column-naming variations across BirdCLEF years:
+      - start_sec / end_sec  (BirdCLEF 2024+)
+      - start_time / end_time
+
+    If the file has multiple rows per time window (one row per detected
+    species) or if species are packed together with semicolons, they are 
+    processed so the first species becomes primary_label and the rest 
+    become secondary_labels, matching BirbSet's soft-target format.
+    """
+    df = pd.read_csv(labels_path)
+
+    rename = {}
+    for col in df.columns:
+        lc = col.lower().strip()
+        if lc in ('start_sec', 'start_time', 'start'):
+            rename[col] = 'start_time'
+        elif lc in ('end_sec', 'end_time', 'end', 'seconds_end'):
+            rename[col] = 'end_time'
+        elif lc in ('primary_label', 'label', 'species', 'birds'):
+            rename[col] = 'primary_label'
+        elif lc in ('secondary_labels', 'secondary'):
+            rename[col] = 'secondary_labels'
+        elif lc in ('filename', 'soundscape_id', 'file_id'):
+            rename[col] = 'filename'
+    df = df.rename(columns=rename)
+
+    required = {'filename', 'start_time', 'end_time', 'primary_label'}
+    missing  = required - set(df.columns)
+    if missing:
+        raise ValueError(
+            f"train_soundscape_labels.csv is missing columns: {missing}. "
+            f"Available: {list(df.columns)}\n"
+            f"Adjust the rename map in load_soundscape_labels() if column names differ."
+        )
+
+    # Infer end_time if missing or all-zero
+    if df['end_time'].isna().all() or (df['end_time'] == 0).all():
+        df['end_time'] = df['start_time'] + clip_length
+
+    if 'secondary_labels' not in df.columns:
+        group_keys = ['filename', 'start_time', 'end_time']
+
+        def aggregate_species(rows):
+            # 1. Gather all species from this window, breaking up semicolon-separated strings
+            all_species = []
+            for val in rows['primary_label'].dropna():
+                val_str = str(val).strip()
+                if ';' in val_str:
+                    tokens = [s.strip() for s in val_str.split(';') if s.strip()]
+                    all_species.extend(tokens)
+                elif val_str:
+                    all_species.append(val_str)
+            
+            # 2. Deduplicate species while preserving sequence order
+            unique_species = []
+            for s in all_species:
+                if s not in unique_species:
+                    unique_species.append(s)
+
+            if not unique_species:
+                return None
+                
+            # 3. First bird is primary, the remainder become secondary
+            r = rows.iloc[0].copy()
+            r['primary_label']    = unique_species[0]
+            r['secondary_labels'] = str(unique_species[1:]) if len(unique_species) > 1 else '[]'
+            return r
+
+        # Run aggregation
+        df = (
+            df.groupby(group_keys, sort=False)
+              .apply(aggregate_species)
+              .dropna()
+        )
+        
+        # FIX: Version-agnostic restoration of grouping columns from index to columns
+        for key in group_keys:
+            if key in df.index.names and key not in df.columns:
+                df = df.reset_index(level=key)
+                
+        # Clean up any remaining index levels safely
+        df = df.reset_index(drop=True)
+    else:
+        # Fallback: If secondary_labels already exists, ensure packed strings 
+        # in primary_label are still split out and appended cleanly.
+        def unpack_row_with_secondary(row):
+            val_str = str(row['primary_label']).strip()
+            if ';' in val_str:
+                tokens = [s.strip() for s in val_str.split(';') if s.strip()]
+                if tokens:
+                    row['primary_label'] = tokens[0]
+                    
+                    try:
+                        existing = ast.literal_eval(str(row['secondary_labels'])) if pd.notna(row['secondary_labels']) else []
+                        if not isinstance(existing, list): existing = [str(existing)]
+                    except Exception:
+                        existing = [str(row['secondary_labels'])] if pd.notna(row['secondary_labels']) and str(row['secondary_labels']).strip() != '[]' else []
+                    
+                    combined = []
+                    for s in (tokens[1:] + existing):
+                        if s not in combined:
+                            combined.append(s)
+                    row['secondary_labels'] = str(combined)
+            return row
+
+        df = df.apply(unpack_row_with_secondary, axis=1)
+        df['secondary_labels'] = df['secondary_labels'].fillna('[]')
+
+    df['audio_path'] = df['filename'].apply(
+        lambda f: os.path.join(soundscape_audio_dir, os.path.basename(str(f)))
+    )
+    df = df[df['primary_label'].isin(label_to_idx)].copy()
+    df['rating'] = np.nan
+
+    exists_mask   = df['audio_path'].apply(os.path.exists)
+    missing_files = (~exists_mask).sum()
+    if missing_files > 0:
+        print(f"  {missing_files} soundscape audio file(s) not found on disk -- skipped.")
+    df = df[exists_mask].reset_index(drop=True)
+
+    print(f"Loaded {len(df)} soundscape clips "
+          f"({df['primary_label'].nunique()} unique species).")
+    return df[['audio_path', 'start_time', 'end_time',
+               'primary_label', 'secondary_labels', 'rating']]
+
+# ==========================================
+# COVERAGE-AWARE SPLIT
+# ==========================================
+def _count_all_appearances(df, primary_col='primary_label',
+                            secondary_col='secondary_labels'):
+    """
+    Count every class occurrence across both primary AND secondary labels.
+
+    Used by build_coverage_aware_split to determine train-only vs val-eligible
+    thresholds. Without this, classes that only appear as secondary labels
+    (e.g. background species in soundscape annotations) all get counted as 0
+    primary occurrences, incorrectly forcing them into train-only status even
+    when they appear dozens of times across the dataset.
+
+    Secondary label strings are stored as Python list representations
+    (e.g. "['asbfly', 'comsan']") -- the same format BirbSet writes.
+    """
+    counts = Counter(df[primary_col].dropna().tolist())
+    if secondary_col not in df.columns:
+        return counts
+    for sec_val in df[secondary_col].dropna():
+        sec_str = str(sec_val).strip()
+        if sec_str in ('[]', '', 'nan', 'None'):
+            continue
+        try:
+            for lbl in ast.literal_eval(sec_str):
+                if lbl and lbl != 'nocall':
+                    counts[lbl] += 1
+        except (ValueError, SyntaxError):
+            pass
+    return counts
+
+
+def build_coverage_aware_split(file_df, soundscape_clips_df=None,
+                                label_col='primary_label', filename_col='filename',
+                                n_splits=5, min_clips_for_val=5, random_state=42):
+    """
+    Split data to maximise TRAINING coverage rather than validation coverage.
+
+    Strategy:
+      1. Count total occurrences of every class across BOTH file_df (train.csv)
+         and soundscape_clips_df, counting appearances as PRIMARY OR SECONDARY
+         labels. This ensures classes that only appear in secondary labels are
+         not incorrectly penalised by a primary-only count.
+
+      2. Classes with < min_clips_for_val total occurrences are "train-only" --
+         all their clips go to training. This guarantees the model trains on
+         every class we know about, including soundscape-only and secondary-only
+         classes that never appear as a primary label in train.csv.
+
+      3. Classes with enough clips get a stratified split: StratifiedGroupKFold
+         on file_df (grouped by filename to prevent leakage), plus a simple
+         random split on soundscape clips (no grouping constraint since each
+         window is an independent annotation).
+
+    Returns
+    -------
+    file_train, file_val : subsets of file_df
+    sc_train, sc_val     : subsets of soundscape_clips_df (None if not provided)
+    train_only_classes   : set of class names intentionally excluded from val
+    """
+    file_counts = _count_all_appearances(file_df)
+    sc_counts   = (_count_all_appearances(soundscape_clips_df)
+                   if soundscape_clips_df is not None and len(soundscape_clips_df) > 0
+                   else Counter())
+
+    all_classes  = set(file_counts) | set(sc_counts)
+    total_counts = {cls: file_counts.get(cls, 0) + sc_counts.get(cls, 0)
+                    for cls in all_classes}
+
+    train_only_classes = {cls for cls, n in total_counts.items() if n < min_clips_for_val}
+    val_eligible       = all_classes - train_only_classes
+
+    # Classes with 0 primary occurrences in file_df (only appear as secondary
+    # or only in soundscapes)
+    primary_only_file  = set(file_df[label_col].unique())
+    secondary_only     = all_classes - primary_only_file
+    soundscape_only    = set(sc_counts.keys()) - set(file_counts.keys())
+
+    print(f"\nClass coverage analysis (min_clips_for_val={min_clips_for_val}):")
+    print(f"  Total classes (primary + secondary, both sources): {len(all_classes)}")
+    print(f"  Classes only in secondary labels                 : {len(secondary_only)}")
+    print(f"  Classes only in soundscapes                      : {len(soundscape_only)}")
+    print(f"  Train-only (too rare for val)                    : {len(train_only_classes)}")
+    print(f"  Val-eligible                                     : {len(val_eligible)}")
+
+    # --- Split file_df ---
+    file_train_only = file_df[file_df[label_col].isin(train_only_classes)]
+    file_val_elig   = file_df[file_df[label_col].isin(val_eligible)]
+
+    n_unique = len(file_val_elig[label_col].unique())
+    if len(file_val_elig) > 0 and n_unique >= n_splits:
+        sgkf = StratifiedGroupKFold(n_splits=n_splits, shuffle=True,
+                                     random_state=random_state)
+        train_idx, val_idx = next(sgkf.split(
+            X=file_val_elig,
+            y=file_val_elig[label_col],
+            groups=file_val_elig[filename_col]
+        ))
+        file_train = pd.concat(
+            [file_train_only, file_val_elig.iloc[train_idx]]
+        ).reset_index(drop=True)
+        file_val = file_val_elig.iloc[val_idx].reset_index(drop=True)
+    else:
+        print("  Too few val-eligible classes to stratify -- all file rows go to training.")
+        file_train = file_df.reset_index(drop=True)
+        file_val   = pd.DataFrame(columns=file_df.columns)
+
+    # --- Split soundscape clips ---
+    sc_train = sc_val = None
+    if soundscape_clips_df is not None and len(soundscape_clips_df) > 0:
+        sc_train_only = soundscape_clips_df[
+            soundscape_clips_df[label_col].isin(train_only_classes)
+        ]
+        sc_val_elig = soundscape_clips_df[
+            soundscape_clips_df[label_col].isin(val_eligible)
+        ]
+        val_frac = 1.0 / n_splits
+        if len(sc_val_elig) > 0:
+            sc_val_part   = sc_val_elig.sample(frac=val_frac, random_state=random_state)
+            sc_train_part = sc_val_elig.drop(sc_val_part.index)
+        else:
+            sc_val_part   = pd.DataFrame(columns=soundscape_clips_df.columns)
+            sc_train_part = sc_val_elig
+
+        sc_train = pd.concat([sc_train_only, sc_train_part]).reset_index(drop=True)
+        sc_val   = sc_val_part.reset_index(drop=True)
+
+    val_cls = (set(file_val[label_col].unique()) if len(file_val) > 0 else set()) |               (set(sc_val[label_col].unique()) if (sc_val is not None and len(sc_val) > 0) else set())
+    print(f"\nSplit result:")
+    print(f"  file_train : {len(file_train)} rows  |  file_val : {len(file_val)} rows")
+    if soundscape_clips_df is not None:
+        print(f"  sc_train   : {len(sc_train)} clips |  sc_val   : {len(sc_val)} clips")
+    print(f"  Classes in val  : {len(val_cls)} / {len(all_classes)} "
+          f"({len(train_only_classes)} intentionally train-only)\n")
+
+    return file_train, file_val, sc_train, sc_val, train_only_classes
 
 # ==========================================
 # MAIN EXECUTION ROUTINE
@@ -827,13 +1138,18 @@ if __name__ == "__main__":
     # 1-3 AUC points in BirdCLEF solutions for essentially zero extra compute.
     # Set to MAX_EPOCHS + 1 to disable SWA entirely.
     SWA_START_EPOCH = 20
+    # Minimum total clip count (across train.csv + soundscapes) for a class
+    # to be eligible for the validation split. Classes below this threshold
+    # are "train-only" -- we train on every clip we have rather than holding
+    # any out for validation, accepting reduced val coverage for those classes.
+    MIN_CLIPS_FOR_VAL = 5
 
     # --- AUGMENTATION TOGGLES ---
-    USE_PINK_NOISE   = False    # colored noise: 1/f pink spectrum
+    USE_PINK_NOISE   = True    # colored noise: 1/f pink spectrum
     USE_WHITE_NOISE  = False   # colored noise: flat white spectrum
-    USE_SPEC_AUGMENT = False    # frequency + time masking on the mel spectrogram
+    USE_SPEC_AUGMENT = True    # frequency + time masking on the mel spectrogram
     USE_PITCH_SHIFT  = False   # ±3 semitone pitch shift via resampling trick
-    USE_ESC50_NOISE  = False   # real environmental background noise from ESC-50
+    USE_ESC50_NOISE  = True   # real environmental background noise from ESC-50
     ESC50_PATH       = os.path.join("..", "ESC-50-master")   # set to None to disable
     # Which ESC-50 sound categories to use as background noise.
     # None or [] means use all 50 categories (original behaviour).
@@ -852,7 +1168,7 @@ if __name__ == "__main__":
         "pouring_water",
         "thunderstorm",
     ]
-    USE_MIXCUT       = False    # batch-level MixUp / CutMix
+    USE_MIXCUT       = True    # batch-level MixUp / CutMix
     MIXCUT_ALPHA     = 0.4     # Beta distribution shape param; lower = milder mixing
     MIXCUT_PROB      = 0.5     # probability of CutMix vs MixUp when mixcut fires
 
@@ -897,80 +1213,48 @@ if __name__ == "__main__":
     )
 
     # --- Load Data & Setup Splits ---
-    # 1. Prepare Focal Recordings
-    focal_df = pd.read_csv(os.path.join(root_path, "train.csv"))
-    focal_df['filepath'] = focal_df['filename'].apply(lambda x: os.path.join(root_path, "train_audio", os.path.normpath(x)))
-    focal_df['start_sec'] = np.nan
-    focal_df['end_sec'] = np.nan
-
-    # 2. Prepare Soundscapes
-    ss_labels_path = os.path.join(root_path, "train_soundscape_labels.csv")
-    if os.path.exists(ss_labels_path):
-        ss_raw = pd.read_csv(ss_labels_path)
-        ss_rows = []
-        for _, row in ss_raw.iterrows():
-            row_id = row['row_id']
-            birds_str = row['birds']
-            
-            # Extract filename and timestamps from row_id (e.g., soundscape_name_5)
-            parts = str(row_id).rsplit('_', 1)
-            filename = parts[0] + ".ogg"
-            end_sec = float(parts[1])
-            start_sec = end_sec - 5.0
-            
-            # Parse bird array
-            if isinstance(birds_str, str):
-                birds = ast.literal_eval(birds_str) if birds_str.startswith('[') else birds_str.split()
-            else:
-                birds = ['nocall']
-                
-            # Skip pure nocall segments to prevent swamping the dataset
-            if not birds or birds == ['nocall']:
-                continue 
-                
-            primary = birds[0]
-            secondary = str(birds[1:])
-            
-            ss_rows.append({
-                'filename': filename,
-                'filepath': os.path.join(root_path, "train_soundscapes", os.path.normpath(filename)),
-                'primary_label': primary,
-                'secondary_labels': secondary,
-                'rating': 5.0, # Expert annotated soundscapes are high confidence
-                'start_sec': start_sec,
-                'end_sec': end_sec
-            })
-            
-        ss_df = pd.DataFrame(ss_rows)
-        full_df = pd.concat([focal_df, ss_df], ignore_index=True)
-        print(f"Merged Data: {len(focal_df)} focal files + {len(ss_df)} soundscape segments.")
-    else:
-        full_df = focal_df
-        print("No train_soundscape_labels.csv found. Proceeding with focal data only.")
-
+    full_df       = pd.read_csv(os.path.join(root_path, "train.csv"))
     unique_labels = pd.read_csv(os.path.join(root_path, "taxonomy.csv"))
     master_label_to_idx = {label: i for i, label in enumerate(unique_labels['primary_label'].unique())}
     num_classes         = len(master_label_to_idx)
 
-    # 3. K-Fold Split
-    sgkf = StratifiedGroupKFold(n_splits=5, shuffle=True, random_state=42)
-    train_indices, val_indices = next(
-        sgkf.split(X=full_df, y=full_df['primary_label'], groups=full_df['filename'])
+    # --- Load soundscape labels (if present) ---
+    soundscape_labels_path = os.path.join(root_path, "train_soundscapes_labels.csv")
+    soundscape_audio_dir   = os.path.join(root_path, "train_soundscapes")
+    sc_clips_all = None
+    if os.path.exists(soundscape_labels_path):
+        print(f"Loading soundscape labels from {soundscape_labels_path} ...")
+        sc_clips_all = load_soundscape_labels(
+            soundscape_labels_path, soundscape_audio_dir,
+            master_label_to_idx, clip_length=CLIP_LENGTH_SEC
+        )
+    else:
+        print("train_soundscapes_labels.csv not found -- proceeding with train.csv only.")
+
+    # --- Coverage-aware split ---
+    # Replaces the old StratifiedGroupKFold + ensure_val_coverage pair.
+    # Priority: train on as many classes as possible. Soundscape-only classes
+    # are included in training regardless. Classes with < MIN_CLIPS_FOR_VAL
+    # total occurrences go entirely to training (no val holdout for them).
+    df_train, df_val, sc_train, sc_val, train_only_cls = build_coverage_aware_split(
+        file_df=full_df,
+        soundscape_clips_df=sc_clips_all,
+        min_clips_for_val=MIN_CLIPS_FOR_VAL,
     )
 
-    df_train = full_df.iloc[train_indices].reset_index(drop=True)
-    df_val   = full_df.iloc[val_indices].reset_index(drop=True)
-    
-    # 4. Apply new training-first priority logic
-    df_train, df_val = prioritize_train_coverage(full_df, df_train, df_val)
-    print(f"After coverage fix — Train: {len(df_train)} | Val: {len(df_val)}")
+    # Log train_only classes count to W&B config after the fact
+    run.config.update({
+        "train_only_classes": len(train_only_cls),
+        "min_clips_for_val": MIN_CLIPS_FOR_VAL,
+        "use_soundscapes": sc_clips_all is not None,
+    }, allow_val_change=True)
 
     # --- DataLoaders ---
     dset_train = BirbSet(
-        df=df_train, 
-        root=os.path.join(root_path, 'train_audio'), 
+        df=df_train,
+        root=os.path.join(root_path, 'train_audio'),
         clip_length=CLIP_LENGTH_SEC,
-        label_to_idx=master_label_to_idx, 
+        label_to_idx=master_label_to_idx,
         is_train=True,
         use_pink_noise=USE_PINK_NOISE,
         use_white_noise=USE_WHITE_NOISE,
@@ -981,25 +1265,23 @@ if __name__ == "__main__":
         esc50_categories=ESC50_CATEGORIES if USE_ESC50_NOISE else None,
         n_mels=N_MELS,
         n_fft=N_FFT,
+        soundscape_clips_df=sc_train,
     )
 
-    # --- WeightedRandomSampler: give each clip a weight inversely proportional
-    #     to its primary-label frequency across all training clips, then sample
-    #     WITH replacement so that rare species appear in roughly equal proportion
-    #     to common ones. This is one of the most impactful non-augmentation
-    #     improvements in past BirdCLEF winning solutions -- without it the model
-    #     sees e.g. 10x more clips of common species than rare ones per epoch,
-    #     which is the primary reason rare classes score near chance on the LB.
-    #
-    #     Note: sampler and shuffle=True are mutually exclusive in PyTorch;
-    #     the sampler takes over the shuffling role. ---
+    # Create a dedicated, seeded generator for the sampler
+    sampler_generator = torch.Generator()
+    sampler_generator.manual_seed(42)
+
+    # WeightedRandomSampler: inverse-frequency weights across ALL training clips
+    # (both train.csv clips and soundscape clips), so rare species drawn from
+    # soundscapes are up-sampled with the same logic as rare train.csv species.
     clip_label_counts = Counter(dset_train.labels)
     sample_weights = torch.tensor(
         [1.0 / clip_label_counts[lbl] for lbl in dset_train.labels],
         dtype=torch.float32
     )
     sampler = WeightedRandomSampler(
-        weights=sample_weights, num_samples=len(sample_weights), replacement=True
+        weights=sample_weights, num_samples=len(sample_weights), replacement=True, generator=sampler_generator
     )
 
     loader = DataLoader(
@@ -1009,18 +1291,20 @@ if __name__ == "__main__":
     )
 
     dset_val = BirbSet(
-        df=df_val, 
-        root=os.path.join(root_path, 'train_audio'), 
+        df=df_val,
+        root=os.path.join(root_path, 'train_audio'),
         clip_length=CLIP_LENGTH_SEC,
-        label_to_idx=master_label_to_idx, 
+        label_to_idx=master_label_to_idx,
         is_train=False,
         n_mels=N_MELS,
         n_fft=N_FFT,
+        soundscape_clips_df=sc_val,
     )
     loader_val = DataLoader(
         dset_val, batch_size=32, shuffle=False, pin_memory=True, num_workers=3,
         worker_init_fn=seed_worker
     )
+
 
     # --- Engine Setup ---
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
