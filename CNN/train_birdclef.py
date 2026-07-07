@@ -1145,12 +1145,11 @@ if __name__ == "__main__":
     MIN_CLIPS_FOR_VAL = 5
 
     # --- AUGMENTATION TOGGLES ---
-    USE_PINK_NOISE   = True    # colored noise: 1/f pink spectrum
+    USE_PINK_NOISE   = False    # colored noise: 1/f pink spectrum
     USE_WHITE_NOISE  = False   # colored noise: flat white spectrum
-    USE_SPEC_AUGMENT = True    # frequency + time masking on the mel spectrogram
+    USE_SPEC_AUGMENT = False    # frequency + time masking on the mel spectrogram
     USE_PITCH_SHIFT  = False   # ±3 semitone pitch shift via resampling trick
-    USE_ESC50_NOISE  = True   # real environmental background noise from ESC-50
-    ESC50_PATH       = os.path.join("..", "ESC-50-master")   # set to None to disable
+    USE_ESC50_NOISE  = False   # real environmental background noise from ESC-50
     # Which ESC-50 sound categories to use as background noise.
     # None or [] means use all 50 categories (original behaviour).
     # Set to a list of category names from meta/esc50.csv to restrict.
@@ -1160,13 +1159,10 @@ if __name__ == "__main__":
     # Recommended environmental-only subset (excludes animals / indoor sounds):
     ESC50_CATEGORIES = [
         "rain",
-        "sea_waves",
         "crackling_fire",
-        "crickets",
         "water_drops",
         "wind",
-        "pouring_water",
-        "thunderstorm",
+        "pouring_water"
     ]
     USE_MIXCUT       = True    # batch-level MixUp / CutMix
     MIXCUT_ALPHA     = 0.4     # Beta distribution shape param; lower = milder mixing
@@ -1286,7 +1282,7 @@ if __name__ == "__main__":
 
     loader = DataLoader(
         dset_train, batch_size=64, shuffle=False, sampler=sampler,
-        pin_memory=True, num_workers=3,
+        pin_memory=True, num_workers=3, persistent_workers=True,
         worker_init_fn=seed_worker, generator=torch.Generator().manual_seed(42)
     )
 
@@ -1302,7 +1298,7 @@ if __name__ == "__main__":
     )
     loader_val = DataLoader(
         dset_val, batch_size=32, shuffle=False, pin_memory=True, num_workers=3,
-        worker_init_fn=seed_worker
+        worker_init_fn=seed_worker, persistent_workers=True
     )
 
 
@@ -1326,7 +1322,7 @@ if __name__ == "__main__":
     # to avoid OOM during the extra pass.
     loader_bn = DataLoader(
         dset_train, batch_size=32, shuffle=True, pin_memory=True, num_workers=3,
-        worker_init_fn=seed_worker
+        worker_init_fn=seed_worker, persistent_workers=True
     )
 
     # --- LR Schedule: linear warmup for WARMUP_EPOCHS, then cosine decay.
