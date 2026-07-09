@@ -1282,7 +1282,6 @@ if __name__ == "__main__":
     parser.add_argument('--head', required=True, type=str, help="Classification head: linear, mlp")
     parser.add_argument('--pink_noise', action='store_true')
     parser.add_argument('--white_noise', action='store_true')
-    parser.add_argument('--pink_noise', action='store_true')
     parser.add_argument('--pitch_shift', action='store_true')
     parser.add_argument('--mixcut', action='store_true')
     args = parser.parse_args()
