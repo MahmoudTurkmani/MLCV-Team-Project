@@ -1280,6 +1280,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--backbone_size', required=True, type=str, help="Bird-MAE size: Base, Large, Huge")
     parser.add_argument('--head', required=True, type=str, help="Classification head: linear, mlp")
+    parser.add_argument('--pink_noise', action='store_true')
+    parser.add_argument('--white_noise', action='store_true')
+    parser.add_argument('--pink_noise', action='store_true')
+    parser.add_argument('--pitch_shift', action='store_true')
+    parser.add_argument('--mixcut', action='store_true')
     args = parser.parse_args()
     
     # --- Configuration ---
@@ -1329,12 +1334,12 @@ if __name__ == "__main__":
     PHASE2_WARMUP_EPOCHS = 1
 
     # --- AUGMENTATION TOGGLES ---
-    USE_PINK_NOISE   = False    # colored noise: 1/f pink spectrum
-    USE_WHITE_NOISE  = False   # colored noise: flat white spectrum
+    USE_PINK_NOISE   = args.pink_noise    # colored noise: 1/f pink spectrum
+    USE_WHITE_NOISE  = args.white_noise   # colored noise: flat white spectrum
     USE_SPEC_AUGMENT = False    # N/A for Bird-MAE -- SpecAugment operates on OUR mel
                                  # spectrogram, which we no longer compute; BirbSet
                                  # forces this off internally when raw_waveform_output=True
-    USE_PITCH_SHIFT  = False   # ±3 semitone pitch shift via resampling trick
+    USE_PITCH_SHIFT  = args.pitch_shift   # ±3 semitone pitch shift via resampling trick
     USE_ESC50_NOISE  = False   # real environmental background noise from ESC-50
     ESC50_PATH       = os.path.join("..", "ESC-50-master")   # set to None to disable
     # Which ESC-50 sound categories to use as background noise.
@@ -1354,7 +1359,7 @@ if __name__ == "__main__":
         "pouring_water",
         "thunderstorm",
     ]
-    USE_MIXCUT       = False    # batch-level MixUp / CutMix
+    USE_MIXCUT       = args.mixcut    # batch-level MixUp / CutMix
     MIXCUT_ALPHA     = 0.4     # Beta distribution shape param; lower = milder mixing
     MIXCUT_PROB      = 0.5     # probability of CutMix vs MixUp when mixcut fires
 
@@ -1368,8 +1373,8 @@ if __name__ == "__main__":
     run_tag = "_".join(tag_parts)
 
     run_name        = f"Training {run_tag}"
-    artifact_name   = f"birdmae_bird_model_{run_tag}"
-    checkpoint_path = f"best_birdmae_model_{run_tag}.pth"
+    artifact_name   = f"model_{run_tag}"
+    checkpoint_path = f"best_model_{run_tag}.pth"
 
     # --- Setup Logging ---
     run = wandb.init(
