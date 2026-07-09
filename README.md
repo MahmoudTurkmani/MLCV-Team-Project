@@ -11,7 +11,7 @@ reptile, mammal, and insect species.
 |    -            |  -  |
 |Mahmoud Trkumani | CNN |
 |Minjun Kim       | {Replace} |
-|Marcel Reihme    | {Replace} |
+|Marcel Reihme    | Bird-MAE |
 
 ## Data
 We begin by having a look at the data from the competition first and understanding it.
@@ -52,3 +52,97 @@ Note: `roc-auc` was chosen as the evaluation metric for the models as it is what
 |Vanilla           | 16    | 0.71118          | 0.72376          |
 |SpecAugment       | 18    | 0.72930          | 0.70461          |
 |SpecAug + Pink    | 1     | 0.66607          | 0.65888          |
+
+### AST
+TODO
+
+### Bird-MAE
+
+Bird-MAE (Rauch et al., 2025) is a masked autoencoder pretrained _exclusively_ on bird audio recordings. During pretraining it learned to reconstruct randomly masked patches of spectrograms — this forces the encoder to build detailed representations of bird vocalizations.
+
+- **HuggingFace model IDs:** `DBD-research-group/Bird-MAE-{Base,Large,Huge}`
+- **Pretraining data:** Bird audio recordings only (masked autoencoder objective)  
+- **Parameters:** 86M (Base), 0.3B (Large), 0.6B (Huge)
+- **Requires:** `trust_remote_code=True`
+
+### Architecture (data flow)
+
+```
+Input: Raw waveform (no spectrogram — feature extractor handles it internally)
+  │
+  ↓ BirdMAEFeatureExtractor (internal)
+       Takes raw waveform → produces (B, 1, 512, 128) internally
+       NOTE: Do NOT pass sampling_rate argument — it is not accepted
+  │
+  ↓ Transformer Encoder layers (hidden dim = 768)
+  │
+  ↓ Already-pooled output: (B, 768)
+       NOTE: output is last_hidden_state, already pooled — no manual pooling needed
+  │
+  ↓ Classification head (768 → 234)
+
+Output: (B, 234) raw logits
+```
+
+### Classification Heads
+
+#### Linear
+```python
+self.classifier = nn.Sequential(
+    nn.LayerNorm(768),
+    nn.Dropout(0.1),
+    nn.Linear(768, 234)
+)
+```
+
+#### MLP
+```python
+self.classifier = nn.Sequential(
+	nn.Linear(768, 512), # hidden_dim 512
+	nn.ReLU(inplace=True),
+	nn.Dropout(p=0.3),
+	nn.Linear(512, 234),
+)
+```
+
+### Training Setup — Two Phases
+
+Bird-MAE required a two-phase training strategy to avoid destroying pretrained representations:
+
+**Phase 1 — Head Warmup (epochs 1–5)**
+
+```
+Encoder:  FROZEN (weights not updated)
+Head:     TRAINED only
+LR:       1e-3
+Purpose:  Let the head adapt to our label space before touching the encoder
+```
+
+**Phase 2 — Full Fine-Tuning (epochs 6–30)**
+
+```
+Encoder:  UNFROZEN (all weights updated)
+Head:     TRAINED
+LR:       1e-5  (very low — avoid destroying pretrained weights)
+Purpose:  Fine-tune everything end-to-end for our specific taxa
+```
+
+| Setting       | Value                                       |
+| ------------- | ------------------------------------------- |
+| Loss function | Focal Loss (γ=1)                            |
+| Optimizer     | AdamW                                       |
+| Epochs        | 30 (5 frozen + 25 full fine-tune)           |
+| Batch size    | 64                                          |
+
+### Results (ROC-AUC)
+
+| Model | Linear | MLP |
+| --- | --- | --- |
+| Base | 0.0 | 0.0 |
+| Large | 0.0 | 0.0 |
+| Huge| 0.0 | 0.0 |
+
+#### With Augmentations
+TODO
+
+---

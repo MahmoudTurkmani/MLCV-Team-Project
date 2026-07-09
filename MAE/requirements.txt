@@ -1,0 +1,6 @@
+transformers==4.48.0
+wandb
+pandas
+numpy
+tqdm
+torch
