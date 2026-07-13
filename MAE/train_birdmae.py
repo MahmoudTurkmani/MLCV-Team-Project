@@ -207,31 +207,6 @@ class BirbSet(Dataset):
             print(f"BirbSet: added {added} soundscape clips "
                   f"({skipped} skipped — label not in taxonomy).")
 
-        # --- Convert per-clip metadata from Python lists to numpy arrays ---
-        # This isn't just tidiness: with num_workers>0, DataLoader workers are
-        # forked copies of this process. Every element of a Python list is a
-        # separate object with its own refcount, and simply *reading* an
-        # element from a forked worker touches (and thus copy-on-write
-        # duplicates) the memory page holding that refcount. With hundreds of
-        # thousands of clips spread across several list attributes, this is a
-        # well-documented way for DataLoader workers to balloon in memory and
-        # get OOM-killed -- especially with persistent_workers=True, since the
-        # duplicated memory then never gets released between epochs.
-        # Numpy arrays don't have this problem: numeric arrays are one
-        # contiguous buffer with no per-element Python objects, and
-        # np.array(list_of_str) becomes a fixed-width unicode buffer (not an
-        # object array) for the same reason -- so converting these here,
-        # once, before any DataLoader workers are forked, avoids the
-        # duplication entirely instead of just working around it.
-        self.clips            = np.array(self.clips)
-        self.secondary_labels = np.array(self.secondary_labels)
-        self.labels           = np.array(self.labels, dtype=np.int64)
-        self.start_times      = np.array(self.start_times, dtype=np.float32)
-        self.end_times        = np.array(self.end_times, dtype=np.float32)
-        self.ratings           = np.array(
-            [np.nan if r is None else r for r in self.ratings], dtype=np.float32
-        )
-
     def __len__(self):
         return len(self.clips)
         
@@ -1797,3 +1772,4 @@ if __name__ == "__main__":
         print(f"\nℹ️  SWA_START_EPOCH ({SWA_START_EPOCH}) not reached — no SWA model produced.")
 
     run.finish()
+
