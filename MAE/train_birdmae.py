@@ -845,7 +845,9 @@ class BirdMAEClassifier(nn.Module):
         # representation learning, this just needs to linearly-ish separate
         # species in embedding space.
         match head:
-            case "linear":    
+            case "linear":
+                print("embed_dim ", embed_dim)
+                print("hidden_dim ", hidden_dim)
                 self.classifier = nn.Sequential(
                     nn.LayerNorm(embed_dim),
                     nn.Dropout(p=dropout),
