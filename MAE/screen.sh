@@ -1,6 +1,6 @@
 #!/bin/bash
 
-module load release/2026 GCCcore/14.3.0 CUDA/12.1.1 Python/3.13.5 FFmpeg/7.1.2
+module load release/2026 GCCcore/14.3.0 Python/3.13.5 FFmpeg/7.1.2
 
 cd /home/mari880e/MLCV-Team-Project/MAE
 

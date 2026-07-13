@@ -848,6 +848,7 @@ class BirdMAEClassifier(nn.Module):
             case "linear":
                 self.classifier = nn.Sequential(
                     nn.LayerNorm(embed_dim),
+                    nn.Linear(embed_dim, hidden_dim),
                     nn.Dropout(p=dropout),
                     nn.Linear(embed_dim, num_classes),
                 )
