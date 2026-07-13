@@ -846,12 +846,10 @@ class BirdMAEClassifier(nn.Module):
         # species in embedding space.
         match head:
             case "linear":
-                print("embed_dim ", embed_dim)
-                print("hidden_dim ", hidden_dim)
                 self.classifier = nn.Sequential(
                     nn.LayerNorm(embed_dim),
                     nn.Dropout(p=dropout),
-                    nn.Linear(hidden_dim, num_classes),
+                    nn.Linear(embed_dim, num_classes),
                 )
             case "mlp":
                 self.classifier = nn.Sequential(
