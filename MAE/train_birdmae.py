@@ -1278,8 +1278,8 @@ def build_coverage_aware_split(file_df, soundscape_clips_df=None,
 # ==========================================
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--backbone_size', required=True, type=str, help="Bird-MAE size: Base, Large, Huge")
-    parser.add_argument('--head', required=True, type=str, help="Classification head: linear, mlp")
+    parser.add_argument('--backbone_size', required=True, choices=["Base", "Large", "Huge"], type=str, help="Bird-MAE size: Base, Large, Huge")
+    parser.add_argument('--head', required=True, type=str, choices=["linear", "mlp"], help="Classification head: linear, mlp")
     parser.add_argument('--pink_noise', action='store_true')
     parser.add_argument('--white_noise', action='store_true')
     parser.add_argument('--pitch_shift', action='store_true')
@@ -1362,7 +1362,7 @@ if __name__ == "__main__":
     MIXCUT_ALPHA     = 0.4     # Beta distribution shape param; lower = milder mixing
     MIXCUT_PROB      = 0.5     # probability of CutMix vs MixUp when mixcut fires
 
-    tag_parts = [f'birdmae-{BIRDMAE_MODEL_SIZE.lower()}-linear']
+    tag_parts = [f'birdmae-{BIRDMAE_MODEL_SIZE.lower()}-{args.head}']
     #if FREEZE_BACKBONE:  tag_parts.append("frozen")
     if USE_PINK_NOISE:   tag_parts.append("pink")
     if USE_WHITE_NOISE:  tag_parts.append("white")

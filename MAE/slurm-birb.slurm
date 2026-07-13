@@ -10,6 +10,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
 #SBATCH --gres=gpu:1
+#SBATCH --mem=64G
 
 module load release/24.04 GCCcore/12.3.0 bzip2/1.0.8
 module load CUDA/12.1.1
