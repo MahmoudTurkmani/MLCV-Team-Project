@@ -850,7 +850,7 @@ class BirdMAEClassifier(nn.Module):
                     nn.LayerNorm(embed_dim),
                     nn.Linear(embed_dim, hidden_dim),
                     nn.Dropout(p=dropout),
-                    nn.Linear(embed_dim, num_classes),
+                    nn.Linear(hidden_dim, num_classes),
                 )
             case "mlp":
                 self.classifier = nn.Sequential(

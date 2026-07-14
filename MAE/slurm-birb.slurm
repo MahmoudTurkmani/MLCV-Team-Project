@@ -5,7 +5,7 @@
 #SBATCH --error=logs/train_%j.err
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=mari880e@mailbox.tu-dresden.de
-#SBATCH --time=08:00:00
+#SBATCH --time=12:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
