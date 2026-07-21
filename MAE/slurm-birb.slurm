@@ -3,7 +3,7 @@
 #SBATCH --job-name=birdmae
 #SBATCH --output=logs/train_%j.out
 #SBATCH --error=logs/train_%j.err
-#SBATCH --mail-type=END,FAIL
+#SBATCH --mail-type=START,END,FAIL
 #SBATCH --mail-user=marcel.riehme@mailbox.tu-dresden.de
 #SBATCH --time=70:00:00
 #SBATCH --nodes=1
