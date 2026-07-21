@@ -4,13 +4,13 @@
 #SBATCH --output=logs/train_%j.out
 #SBATCH --error=logs/train_%j.err
 #SBATCH --mail-type=END,FAIL
-#SBATCH --mail-user=mari880e@mailbox.tu-dresden.de
-#SBATCH --time=12:00:00
+#SBATCH --mail-user=marce.riehme@mailbox.tu-dresden.de
+#SBATCH --time=70:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=4
+#SBATCH --cpus-per-task=8
 #SBATCH --gres=gpu:1
-#SBATCH --mem=64G
+#SBATCH --mem=128G
 
 #module load release/24.04 GCCcore/12.3.0 bzip2/1.0.8
 #module load CUDA/12.1.1
