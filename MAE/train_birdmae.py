@@ -1288,7 +1288,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     
     # --- Configuration ---
-    workspace_path  = "/data/horse/ws/mari880e-mlcv/birdmae"
+    workspace_path  = "/data/horse/ws/mari880e-mlcv-birdmae"
     root_path       = os.path.join(workspace_path, "birdclef-2026")
     WANDB_PATH      = os.path.join(workspace_path, "wandb")
     MODELS_PATH     = os.path.join(workspace_path, "models")
@@ -1384,7 +1384,7 @@ if __name__ == "__main__":
         entity="axialmars-tu-dresden",
         project="BirdsArentReal",
         name=run_name,
-        dir=WANDB_DIR,
+        dir=WANDB_PATH,
         config={
             "head_learning_rate": HEAD_LR,
             "backbone_learning_rate": BACKBONE_LR,
