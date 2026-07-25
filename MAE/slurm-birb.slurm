@@ -24,4 +24,5 @@ echo "Job started at: $(date)"
 echo "Running on node: $SLURM_NODENAME"
 echo "Using GPU(s): $CUDA_VISIBLE_DEVICES"
 
+WANDB_CACHE_DIR="/data/horse/ws/mari880e-mlcv-birdmae/cache/"
 python train_birdmae.py "$@"

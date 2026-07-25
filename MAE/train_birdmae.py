@@ -1288,7 +1288,10 @@ if __name__ == "__main__":
     args = parser.parse_args()
     
     # --- Configuration ---
-    root_path       = os.path.join("../", "birdclef-2026")
+    workspace_path  = "/data/horse/ws/mari880e-mlcv/birdmae"
+    root_path       = os.path.join(workspace_path, "birdclef-2026")
+    WANDB_PATH      = os.path.join(workspace_path, "wandb")
+    MODELS_PATH     = os.path.join(workspace_path, "models")
     CLIP_LENGTH_SEC = 5.0  
     MAX_EPOCHS      = 30
     PATIENCE        = 12
@@ -1374,13 +1377,14 @@ if __name__ == "__main__":
 
     run_name        = f"Training {run_tag}"
     artifact_name   = f"model_{run_tag}"
-    checkpoint_path = f"best_model_{run_tag}.pth"
+    checkpoint_path = os.path.join(MODELS_PATH, f"best_model_{run_tag}.pth")
 
     # --- Setup Logging ---
     run = wandb.init(
         entity="axialmars-tu-dresden",
         project="BirdsArentReal",
         name=run_name,
+        dir=WANDB_DIR,
         config={
             "head_learning_rate": HEAD_LR,
             "backbone_learning_rate": BACKBONE_LR,
