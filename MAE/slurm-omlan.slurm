@@ -24,4 +24,4 @@ echo "Job started at: $(date)"
 echo "Running on node: $SLURM_NODENAME"
 echo "Using GPU(s): $CUDA_VISIBLE_DEVICES"
 
-python omlan_birdmae.py
+python omlan_birdmae.py "$@"

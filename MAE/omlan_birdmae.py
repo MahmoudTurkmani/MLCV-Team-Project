@@ -19,6 +19,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import average_precision_score, roc_auc_score
 import librosa
 import wandb
+import argparse
 
 warnings.filterwarnings('ignore')
 
@@ -30,6 +31,7 @@ MODEL_ID       = 'DBD-research-group/Bird-MAE-Base'
 SAMPLE_RATE    = 32000
 TARGET_SAMPLES = 32000 * 5   # 160000 samples = 5 seconds
 EMBED_DIM      = 768          # Bird-MAE-Base output dimension (confirmed)
+HIDDEN_DIM     = 512
 BATCH_SIZE     = 32           # H100 has 80GB — comfortable at 32
 NUM_EPOCHS     = 30
 PHASE2_START   = 6            # epoch at which encoder is unfrozen
@@ -123,15 +125,27 @@ class BirdMAEClassifier(nn.Module):
     Encoder output is already globally pooled → [B, 768].
     No additional pooling needed (confirmed from probe).
     """
-    def __init__(self, model_id: str, num_classes: int):
+    def __init__(self, model_id: str, num_classes: int, head: str):
         super().__init__()
         self.encoder = AutoModel.from_pretrained(model_id, trust_remote_code=True)
-        self.head = nn.Sequential(
-            nn.LayerNorm(EMBED_DIM),
-            nn.Dropout(0.1),
-            nn.Linear(EMBED_DIM, num_classes)
-        )
-
+        match head:
+            case "linear":
+                self.head = nn.Sequential(
+                    nn.LayerNorm(EMBED_DIM),
+                    nn.Dropout(0.1),
+                    nn.Linear(EMBED_DIM, num_classes)
+                )
+            case "mlp":
+                self.head = nn.Sequential(
+                    nn.Linear(EMBED_DIM, 512),
+                    nn.ReLU(inplace=True),
+                    nn.Dropout(0.1),
+                    nn.Linear(512, num_classes)
+                )
+            case _:
+                print("choice of head failed")
+                sys.exit(1)
+    
     def forward(self, mel: torch.Tensor) -> torch.Tensor:
         # mel: [B, 1, 512, 128]
         out       = self.encoder(mel)
@@ -219,6 +233,10 @@ def val_epoch(model, loader, criterion, device):
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--head', required=True, type=str, choices=["linear", "mlp"], help="Classification head: linear, mlp")
+    args = parser.parse_args()
+
     print(f'Device : {DEVICE}')
     if DEVICE.type == 'cuda':
         print(f'GPU    : {torch.cuda.get_device_name(0)}')
@@ -269,7 +287,7 @@ def main():
 
     # ── Model ─────────────────────────────────────────────────────────────────
     print('Loading Bird-MAE-Base encoder...')
-    model     = BirdMAEClassifier(MODEL_ID, num_classes).to(DEVICE)
+    model     = BirdMAEClassifier(MODEL_ID, num_classes, args.head).to(DEVICE)
     criterion = FocalLoss(gamma=FOCAL_GAMMA)
 
     # Phase 1 — freeze encoder, train head only
@@ -280,11 +298,12 @@ def main():
     )
 
     # ── W&B ──────────────────────────────────────────────────────────────────
-    wandb.init(
+    run = wandb.init(
         project='birdclef-2026',
-        name='bird_mae_base_v1',
+        name=f'bird_mae_base_{args.head}',
         config={
             'model'        : MODEL_ID,
+            'head'         : args.head,
             'batch_size'   : BATCH_SIZE,
             'lr_head'      : LR_HEAD,
             'lr_finetune'  : LR_FINETUNE,
@@ -329,7 +348,7 @@ def main():
         })
 
         # Save best checkpoint
-        checkpoint_path = f'models/omlan_best_bird_mae_base_ep{epoch}.pth')
+        checkpoint_path = f'models/omlan_best_bird_mae_base_{args.head}_ep{epoch}.pth'
         if val_map > best_map:
             best_map = val_map
             torch.save({
