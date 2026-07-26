@@ -1294,7 +1294,7 @@ if __name__ == "__main__":
     MODELS_PATH     = os.path.join(workspace_path, "models")
     CLIP_LENGTH_SEC = 5.0  
     MAX_EPOCHS      = 30
-    PATIENCE        = 12
+    PATIENCE        = 8
     WARMUP_EPOCHS   = 3     # linear LR ramp-up before cosine decay kicks in
     FOCAL_GAMMA     = 1.0   # focal loss concentration; 0=plain BCE, 2=original RetinaNet default
     # Spectrogram resolution -- 128 mels is the near-universal choice in top
@@ -1405,6 +1405,7 @@ if __name__ == "__main__":
             "use_mixcut": USE_MIXCUT,
             "mixcut_alpha": MIXCUT_ALPHA,
             "mixcut_prob": MIXCUT_PROB,
+            "head_type": args.head,
         },
     )
 
