@@ -75,7 +75,7 @@ Both **EfficientNet B0** (~5M params) and **B3** (~12M params) were fine-tuned. 
 | V3 | ✅ | ✅ | ✅ | ✅ | |
 | V4 | | ✅ | | | ✅ |
 | V5 | | ✅ | | ✅ | |
-| V6 | ✅ | | ✅ | ✅ |
+| V6 | ✅ | | ✅ | | ✅ |
 
 **Competition results (Kaggle leaderboard):**
 
