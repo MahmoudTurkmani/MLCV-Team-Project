@@ -45,7 +45,6 @@ The competition is scored primarily on:
 MLCV-Team-Project/
 ├── CNN/                    # EfficientNet B0/B3 training pipeline
 ├── MAE/                    # Bird-MAE fine-tuning pipeline
-├── train_preproc_old.csv   # Preprocessed training manifest
 └── README.md
 ```
 
